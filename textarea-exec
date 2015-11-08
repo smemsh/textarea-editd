@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# textarea-exec
+#   invoke an editor with text given to us by textarea-editd
+#
+# - args: path_to_tmpfile host_from_reqest last_url_component
+# - script calling us expects edits completed when we exit
+#   (for that reason, urxvtc cannot be used, but TODO:
+#    figure out the socket protocol and follow spawned window)
+#
+# scott@smemsh.net
+# http://smemsh.net/src/textarea-editd/
+#
+##############################################################################
+
+urxvt -T textarea:"${2}:${3}" -e bash -ic "vim \"$1\""

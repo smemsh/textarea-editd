@@ -1,0 +1,181 @@
+#!/usr/bin/env perl
+#
+# textarea-editd
+#   simple web server to run editor from textaid extension to chromium
+#
+# usage:
+#   - daemonize textarea-editd
+#   - focus on textarea to edit in chromium
+#   - click on '+' in location bar (from textaid)
+#
+# delta:
+#   - mostly just deleted stuff
+#   - some changes were made to matching
+#   - logging was added
+#   - possibly other stuff, need to inspect diff
+#
+# orig: http://opencoder.net/edit-server (wayne@opencoder.net) (?)
+# fork: http://smemsh.net/src/textarea-editd/
+# scott@smemsh.net
+#
+##############################################################################
+
+use strict;
+use warnings;
+use threads;
+use Socket;
+use IO::Select;
+use File::Temp;
+
+our $PORT = 8888;
+our $TMPDIR = "$ENV{'HOME'}/var/textarea";  # not somewhere volatile like /tmp
+our $editexec = "textarea-exec";
+
+$| = 1;
+
+local *S;
+socket(S, PF_INET, SOCK_STREAM , getprotobyname('tcp')) ||
+		die "couldn't open socket: $!\n";
+setsockopt(S, SOL_SOCKET, SO_REUSEADDR, 1);
+bind(S, sockaddr_in($PORT, inet_aton('127.0.0.1')));
+listen(S, 5) || die "listen failed: $!\n";
+
+my $sel = IO::Select->new();
+$sel->add(*S);
+
+while (1) {
+	my @con = $sel->can_read();
+	foreach my $con (@con) {
+		my $fh;
+		my $remote = accept($fh, $con);
+		my($port, $iaddr) = sockaddr_in($remote);
+		my $addr = inet_ntoa($iaddr);
+
+		my $t = threads->create(\&do_edit, $fh);
+		$t->detach();
+	}
+}
+
+exit;
+
+# Read the text from the content body, edit it, and write it back as our output.
+sub do_edit
+{
+	my($fh) = @_;
+	binmode $fh;
+
+	# make the logs easier to decipher
+	printf("\n");
+
+	local $_ = <$fh>;
+	my $matchstr = $_;
+		printf("%10s: %s", 'matchstr', $matchstr);
+
+	my $mre = '^(GET|HEAD|POST)';
+	my $pre = '(.*?)';
+	my $vre = '(HTTP\S+)';
+	my $fre = "$mre\\s+\/\\?id=.*?&";
+	my $ure = "url=$pre\\s+$vre\\s*\$";
+	my  $re = "$fre" . "$ure";
+		printf("%10s: %s\n", 're', $re);
+
+	my($method, $path, $v) = $matchstr =~ /$re/;
+		printf("%10s: %s\n", 'method', $method);
+		printf("%10s: %s\n", 'path', $path);
+		printf("%10s: %s\n", 'v', $v);
+
+	my($host, $fullpath) = $path =~ /[^\/]+\/\/([^\/]+)\/(.*)$/;
+		printf("%10s: %s\n", 'host', $host);
+		printf("%10s: %s\n", 'fullpath', $fullpath);
+
+	# XXX TODO: should read: "everything up to a
+	# possible first slash is stripped before taking the
+	# sample, or nothing is stripped if no slash exists"
+	# but does not, i.e. depends on there being a slash
+	# i.e. more than one level of hierarchy to the URL.
+	#
+	# XXX TODO should this maybe convert the %s to
+	# useful characters for appearing in window titles
+	# and editor buffer filenames?
+	#
+	#my($endpath) = $fullpath =~ /.*\/([^%]+)/;
+	my($endpath) = "$$";
+		printf("%10s: %s\n", 'endpath', $endpath);
+
+	my($tld2) = $host =~ /[^\.]*?([^\.]+)\.[^\.]+$/;
+		printf("%10s: %s\n", 'tld2', $tld2);
+
+	unless (defined $v) {
+		http_header($fh, 500, 'Invalid request -- no id or url?\n');
+		close $fh;
+		return;
+	}
+	if ($method ne 'POST') {
+		http_header($fh, 200, 'POST file to edit as content body.');
+		close $fh;
+		return;
+	}
+
+	my %header;
+
+	while (<$fh>) {
+		s/\r?\n$//;
+		last if $_ eq '';
+
+		my($name, $value) = /^(.*?): +(.*)/;
+		$header{lc($name)} = $value;
+	}
+
+	my $len = $header{'content-length'};
+	unless (defined $len && $len =~ /^\d+$/) {
+		http_header($fh, 500, 'Invalid request -- no content-length.');
+		close $fh;
+		return;
+	}
+
+	my $tmp = new File::Temp(
+		TEMPLATE => "edit-server-$host-$endpath-XXXXXX",
+		DIR => $TMPDIR,
+		SUFFIX => '.txt',
+		UNLINK => 0,
+	);
+	my $name = $tmp->filename;
+
+	my $got = read($fh, $_, $len);
+	if ($got != $len) {
+		http_header($fh, 500, 'Invalid request -- wrong content-length.');
+		close $fh;
+		return;
+	}
+
+	print $tmp $_;
+	close $tmp;
+
+	my $EDITOR_CMD = "$editexec \"%s\" \"%s\" \"%s\"";
+	my $cmd = sprintf($EDITOR_CMD, $name, lc($tld2), lc($endpath));
+	system $cmd;
+	printf("returned from system: \"$cmd\"\n");
+
+	unless (open FILE, '<', $name) {
+		http_header($fh, 500, "Unable to re-open $name: $!");
+		close $fh;
+		return;
+	}
+
+	printf("200 will be returned\n");
+	http_header($fh, 200);
+	print $fh <FILE>;
+
+	close FILE;
+	close $fh;
+}
+
+sub http_header
+{
+	my $fh = shift;
+	my $status = shift;
+	print $fh "HTTP/1.0 $status\r\n",
+			  "Server: edit-server\r\n",
+			  "Content-Type: text/plain\r\n",
+			  "\r\n", @_;
+}
