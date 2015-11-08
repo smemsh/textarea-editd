@@ -14,9 +14,13 @@
 #   - logging was added
 #   - possibly other stuff, need to inspect diff
 #
+# stat:
+#   - used by author sometimes for textareas within chromium
+#   - some paths are site-local (especially $TMPDIR)
+#   - opencoder.net url was refd in textaid chrome extension docs
+#
 # orig: http://opencoder.net/edit-server (wayne@opencoder.net) (?)
-# fork: http://smemsh.net/src/textarea-editd/
-# scott@smemsh.net
+# fork: http://smemsh.net/src/textarea-editd/ (scott@smemsh.net)
 #
 ##############################################################################
 
